@@ -46,4 +46,4 @@
 *.pyc
 *.pro.user
 *.aplx
-
+run*

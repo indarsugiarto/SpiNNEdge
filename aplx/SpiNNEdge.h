@@ -30,8 +30,8 @@ static const uint FILT_DENOM = 159;
 #define PRIORITY_TIMER			4
 #define PRIORITY_PROCESSING		3
 #define PRIORITY_SDP			2
-#define PRIORITY_MCPL			1
-#define PRIORITY_DMA			0
+#define PRIORITY_MCPL			0
+#define PRIORITY_DMA			1
 
 #define SDP_TAG_REPLY			1
 #define SDP_UDP_REPLY_PORT		20000
@@ -63,7 +63,9 @@ static const uint FILT_DENOM = 159;
 
 //we also has direct key to each core (see initRouter())
 #define MCPL_BCAST_CMD_KEY		0xbca5c00d  // command for edge detection
-#define MCPL_BCAST_INFO_KEY		0xbca514f0
+#define MCPL_BCAST_INFO_KEY		0xbca514f0	// for ping
+#define MCPL_BCAST_SZIMG_KEY	0xbca52219	// for broadcasting image size
+#define MCPL_BCAST_BLK_KEY		0xbca5b10c  // for broadcasting block info
 #define MCPL_BCAST_FILT_KEY		0xbca5c44d	// command for filtering only
 #define MCPL_INFO_TO_LEADER		0x14f01ead
 #define MCPL_FLAG_TO_LEADER		0xf1a61ead	// worker send signal to leader
@@ -74,6 +76,7 @@ static const uint FILT_DENOM = 159;
 #define CMD_DETECTION			0x21
 
 typedef struct block_info {
+	// part that will pre-collected by leadAp
 	ushort wImg;
 	ushort hImg;
 	ushort isGrey;
@@ -81,13 +84,15 @@ typedef struct block_info {
 	uchar opFilter;			// 0==no filtering, 1==with filtering
 	ushort nodeBlockID;		// will be send by host
 	ushort maxBlock;		// will be send by host
+	// part that will be filled by workers (including leadAp as worker-0)
+	ushort subBlockID;		// closely related with wID in w_info_t
 } block_info_t;
 
 // worker info
 typedef struct w_info {
 	uchar wID[17];			// this is the coreID, maximum worker is 17
-	uchar subBlockID[17];		// this the mapped subBlockID of workers
-	uchar available;		// should be initialized to 1
+	//uchar subBlockID[17];	// just a helper, this maps subBlockID of workers
+	uchar tAvailable;		// how many workers? should be initialized to 1
 } w_info_t;
 
 
@@ -124,7 +129,8 @@ uint szDMA;
 #define DMA_MOVE_IMG_B			0x42
 
 uint myCoreID;
-w_info_t workers;
+w_info_t workers;			// will be held by leadAp
+
 block_info_t blkInfo;
 uchar nJobDone;				// will be used to count how many workers have
 							// finished their job in either filtering or edge detection
@@ -140,12 +146,19 @@ void imgFiltering(uint arg0, uint arg1);	// this is separate operation from edge
 void initSDP();
 void initRouter();
 void initImage();
+void initIPTag();
 void hDMADone(uint tid, uint tag);
 void hTimer(uint tick, uint Unused);
 void hMCPL(uint key, uint payload);
 void pingWorkers(uint arg0, uint arg1);
+void infoSzImgWorkers(uint arg0, uint arg1);
+void infoBlkImgWorkers(uint arg0, uint arg1);
 void imgFiltering(uint arg0, uint arg1);
 void imgProcessing(uint arg0, uint arg1);
+void computeMyRegion(uint arg0, uint arg1);
+void printImgInfo();
+void printWorkerIDInfo(uint arg0, uint arg1);
+
 /*--------------------------------------- IMPLEMENTATIONS --------------------------------------*/
 
 // PrepareMemImage() will allocate and deallocate sdram.

@@ -9,8 +9,7 @@ void hDMADone(uint tid, uint tag)
 
 void hMCPL(uint key, uint payload)
 {
-/*
-	// this is worker's part
+	//------------------------ this is worker's part ---------------------------
 	if(key==MCPL_BCAST_INFO_KEY) {
 		// leadAp sends "0" for ping, worker replys with its core
 		// withouth any additional info in the payload part
@@ -21,15 +20,21 @@ void hMCPL(uint key, uint payload)
 		}
 		else {
 			blkInfo.wImg = payload >> 16;
-			blkInfo.hImg = payload && 0xFFFF;
+			blkInfo.hImg = payload & 0xFFFF;
 		}
 	}
-	// myCoreID is the key-signal to start either imgFiltering() or imgProcessing()
+	// leadAp sends worker working region as wID
 	else if(key==myCoreID) {
+
+		workers.tAvailable = payload >> 16;		// worker need this to compute its region
+		blkInfo.subBlockID = payload & 0xFFFF;
+		//for debugging:
+		spin1_schedule_callback(printWorkerIDInfo,0,0,PRIORITY_PROCESSING);
+		/*
 		//fetch this: [cmd_Type(4), isGray(4), opType(8), subBlockID(8), mainBlockID(8)]
 		//first, check if this is only for filtering
 		blkInfo.nodeBlockID = payload & 0xFF;
-		blkInfo.subBlockID = (payload >> 8) & 0xFF;
+		//blkInfo.subBlockID = (payload >> 8) & 0xFF;
 		if((payload >> 28) == CMD_FILTERING) {
 			spin1_schedule_callback(imgFiltering,0,0,PRIORITY_PROCESSING);
 		// note: once filtering is complete, leadAp must copy FIL_IMG to ORG_IMG
@@ -40,28 +45,41 @@ void hMCPL(uint key, uint payload)
 			blkInfo.isGrey = (payload >> 24) & 0xF;
 			spin1_schedule_callback(imgProcessing,0,0,PRIORITY_PROCESSING);
 		}
+		*/
 	}
-	// this is leadAp part
+	// worker receives image size info
+	else if(key==MCPL_BCAST_SZIMG_KEY) {
+		blkInfo.wImg = payload >> 16;
+		blkInfo.hImg = payload & 0xFFFF;
+	}
+	// worker receives block info
+	else if(key==MCPL_BCAST_BLK_KEY) {
+		blkInfo.isGrey = payload >> 16;
+		blkInfo.nodeBlockID = (payload & 0xFFFF) >> 8;
+		blkInfo.maxBlock = payload & 0xFF;
+		spin1_schedule_callback(computeMyRegion, 0, 0, PRIORITY_PROCESSING);
+	}
+
+	//-------------------------- this is leadAp part ---------------------------
 	else if(key==MCPL_INFO_TO_LEADER) {
-		workers.wID[workers.available] = payload;	// this will be automatically mapped to workers.subBlockID[workers.available]
-		workers.available++;
+		// for debugging: NO!!! DON'T PUT PROCESSING HERE!!!!
+		// it'll be automatically mapped to workers.subBlockID[workers.tAvailable]
+		workers.wID[workers.tAvailable] = payload;
+		workers.tAvailable++;
 	}
 	// workers send MCPL_FLAG_TO_LEADER after finishing either
 	// filtering or edge detection
 	else if(key==MCPL_FLAG_TO_LEADER) {
 		if(payload==FLAG_FILTERING_DONE) {
 			nJobDone++;
-			if(nJobDone==workers.available)
+			if(nJobDone==workers.tAvailable)
 				// before detection, move FIL_IMG to ORG_IMG
 				spin1_schedule_callback(triggerPreProcessing, 0, 0, PRIORITY_PROCESSING);
 		}
 	}
-*/
-}
-
-void pingWorkers(uint arg0, uint arg1)
-{
-	spin1_send_mc_packet(MCPL_BCAST_INFO_KEY, 0, WITH_PAYLOAD);
+	else {
+		io_printf(IO_BUF, "Got 0x%x:0x%x\n", key, payload);
+	}
 }
 
 // how to carry subBlockID and other info for core in MCPL?
@@ -87,9 +105,9 @@ void triggerWorker(uint cmd_Type, uint arg1)
 	// send notification to all workers (except myself) about their part
 	// and inform them to perform particular operation:
 	//		[isGray(4), isFiltering(4), isSobel(8), subBlockID(8), mainBlockID(8)]
-	for(i=1; i<workers.available; i++) {
+	for(i=1; i<workers.tAvailable; i++) {
 		key_core = workers.wID[i];
-		subBlockID = workers.subBlockID[i];
+//		subBlockID = workers.subBlockID[i];
 //		info = (cmd_Type << 28) + (blkInfo.isGrey << 24) +
 //				(blkInfo.opType << 16) + (blkInfo.subBlockID << 8) + blkInfo.nodeBlockID;
 		spin1_send_mc_packet(key_core, info, WITH_PAYLOAD);
@@ -116,7 +134,7 @@ void imgFiltering(uint arg0, uint arg1)
 	// so that the leadAp can move FIL_IMG to ORG_IMG
 	if(leadAp) {
 		nJobDone++;
-		if(nJobDone==workers.available)
+		if(nJobDone==workers.tAvailable)
 			spin1_schedule_callback(triggerPreProcessing, 0, 0, PRIORITY_PROCESSING);
 	}
 }
@@ -135,24 +153,37 @@ void c_main()
 {
 	initImage();
 	myCoreID = sark_core_id();
-	io_printf(IO_STD, "SpiNNEdge running @ core-%d id-%d\n",
-			  sark_core_id(), sark_app_id());
 	spin1_callback_on(MCPL_PACKET_RECEIVED, hMCPL, PRIORITY_MCPL);
 	// only leadAp has access to dma and sdp
 	if(leadAp) {
+		// fill info for leadAp
+		workers.wID[0] = myCoreID;
+		workers.tAvailable = 1;	// includes leadAp
+		blkInfo.subBlockID = 0;	// only for leadAp, which always 0
+		//workers.subBlockID[0] = 0;
+
+		// register callbacks
 		spin1_set_timer_tick(TIMER_TICK_PERIOD_US);
 		spin1_callback_on(TIMER_TICK, hTimer, PRIORITY_TIMER);
-		workers.wID[0] = myCoreID;
-		workers.available = 1;
-		workers.subBlockID[0] = 0;
-//		blkInfo.subBlockID = 0;	// the subBlockID of leadAP is always 0
-		for(uint i=1; i<17; i++) workers.subBlockID[i] = i;
 		spin1_callback_on(DMA_TRANSFER_DONE, hDMADone, PRIORITY_DMA);
+
+		// other initialization
 		initSDP();
 		initRouter();
+		initIPTag();
+
+		// prepare the last step
+		io_printf(IO_BUF, "SpiNNEdge leader @ core-%d id-%d\n",
+				  sark_core_id(), sark_app_id());
+		// give a chance for workers to be ready
+		// before the first "ping" is broadcasted!!!
+		spin1_delay_us(10000);
+	}
+	else {
+		io_printf(IO_BUF, "SpiNNEdge worker @ core-%d id-%d\n",
+				  sark_core_id(), sark_app_id());
 	}
 	// first, notify workers that leadAP is ready and collect their IDs
 	// this mechanism should finish in less than 1s
-	spin1_schedule_callback(pingWorkers, 0,0,PRIORITY_MCPL);
 	spin1_start(SYNC_NOWAIT);
 }

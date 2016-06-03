@@ -185,7 +185,8 @@ class edgeGUI(QtGui.QWidget, mainGUI.Ui_pySpiNNEdge):
             opt = 4
         seq = (isGray << 8) + opt
         arg1 = (self.w << 16) + self.h
-        scp = struct.pack('2H3I',cmd,seq,arg1,0,0)
+        arg2 = 1    # will contain nodeBlockID and maxBlock, here we use only 1 chip
+        scp = struct.pack('2H3I',cmd,seq,arg1,arg2,0)
         sdp = pad + hdrc + scp
         udpSock.writeDatagram(sdp, QtNetwork.QHostAddress(DEF_HOST), DEF_SEND_PORT)
         #this time, no need for reply
