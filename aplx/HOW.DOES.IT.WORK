@@ -1,0 +1,55 @@
+1. Tentukan, mau pakai board yang mana? spin3 atau spin5
+   --> Karena akan mempengaruhi bagaimana file akan dipecah
+       dan didistribusi ke masing-masing sdram.
+       How is image/memory split?
+       in spin3 -> divide by 4 (as 2x2), easy
+       in spin5 -> divide by 48 (as 6x8 or 8x6) --> should be organized by the host
+
+
+2. Awalnya, mau pakai sload dan sdump dari python tapi ternyata tidak bisa,
+karena environment SPINN_DIRS tidak dikenali oleh os.system("some_command")
+--> jadi harus kirim manual via sdp
+
+The idea is:
+1. not all chips in the board might be used only for edge detection
+   in future, some chips might be used for encoding (from jpeg, etc)
+2. so, each chip must be "told" by host PC, which region (as "nodeBlockID")
+   that chip will work on. When host send nodeBlockID and maxBlock, the
+   leadAp will pass on to all wokers on the chip that will compute startx,
+   starty, endx, endy individually.
+3. Block and subblock should be computed such that they fit the "image boundary"
+   +---------------------------------+
+   |                                 |
+   |             One block           |
+   |                                 |
+   +---------------------------------+
+   |                                 |
+   |                etc.             |
+
+_________________________ Sending images from host to spinnaker _______________________
+# aku tidak tahu bagaimana pakai rig untuk download data langsung ke sdram
+(seharusnya ada)
+
+Awalnya, aku pikir: sending images from host to spinnaker:
+cmd = 0x1234
+seq = the sequence
+arg1.high = width
+arg1.low = heigth
+arg2.high = isgrey (0=color, 1=grey)
+arg2.low = color layer (0=red, 1=green, 2=blue)
+// NOTE: what if we use arg part of SCP for image data? No, because:
+// 1. we have to send reply with seq-number
+// 2. we need to tell spinnaker, what colour layer is being sent
+
+Tapi mungkin bisa diakali dengan membuat port terpisah untuk masing-masing layer
+_______________________________________________ Sending images from host to spinnaker __
+
+__________________________________ How it starts _______________________________________
+1. a. leadAp broadcast "ping" to find out which cores are available in its chip
+      we restrict to chip-coverage, not board coverate, see the idea above
+   b. all cores respond by sending their core-id in the payload
+      for graceful, spare one core for "backup-up"
+   c. leadAp build the map of available core and then pass the nodeBlockID and
+      maxBlock to all workers so that each core can compute their working region
+
+____________________________________________________________________ How it starts _____
